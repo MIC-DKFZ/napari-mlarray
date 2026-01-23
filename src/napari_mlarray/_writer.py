@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Union
+from mlarray import MLArray, Meta
 
 if TYPE_CHECKING:
     DataType = Union[Any, Sequence[Any]]
@@ -33,33 +34,8 @@ def write_single_image(path: str, data: Any, meta: dict) -> list[str]:
     -------
     [path] : A list containing the string path to the saved file.
     """
-
-    # implement your writer logic here ...
-
-    # return path to any file(s) that were successfully written
-    return [path]
-
-
-def write_multiple(path: str, data: list[FullLayerData]) -> list[str]:
-    """Writes multiple layers of different types.
-
-    Parameters
-    ----------
-    path : str
-        A string path indicating where to save the data file(s).
-    data : A list of layer tuples.
-        Tuples contain three elements: (data, meta, layer_type)
-        `data` is the layer data
-        `meta` is a dictionary containing all other metadata attributes
-        from the napari layer (excluding the `.data` layer attribute).
-        `layer_type` is a string, eg: "image", "labels", "surface", etc.
-
-    Returns
-    -------
-    [path] : A list containing (potentially multiple) string paths to the saved file(s).
-    """
-
-    # implement your writer logic here ...
+    mlarray = MLArray(data, meta=Meta.from_dict(meta["metadata"]))
+    mlarray.save(path)
 
     # return path to any file(s) that were successfully written
     return [path]

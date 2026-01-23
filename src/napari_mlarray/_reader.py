@@ -5,7 +5,7 @@ It implements the Reader specification, but your plugin may choose to
 implement multiple readers or even other plugin contributions. see:
 https://napari.org/stable/plugins/building_a_plugin/guides.html#readers
 """
-import numpy as np
+from mlarray import MLArray
 
 
 def napari_get_reader(path):
@@ -34,8 +34,7 @@ def napari_get_reader(path):
     # it with memmap, so that we don't actually load the full array into memory.
     # We pretend that this reader can only read integer arrays.
     try:
-        arr = np.load(path, mmap_mode='r')
-        if arr.dtype != np.int_:
+        if not str(path).endswith(".mla"):
             return None
     # napari_get_reader should never raise an exception, because napari
     # raises its own specific errors depending on what plugins are
@@ -73,12 +72,6 @@ def reader_function(path):
     # handle both a string and a list of strings
     paths = [path] if isinstance(path, str) else path
     # load all files into array
-    arrays = [np.load(_path) for _path in paths]
-    # stack arrays into single array
-    data = np.squeeze(np.stack(arrays))
-
-    # optional kwargs for the corresponding viewer.add_* method
-    add_kwargs = {}
-
-    layer_type = "image"  # optional, default is "image"
-    return [(data, add_kwargs, layer_type)]
+    mlarrays = [MLArray().open(_path) for _path in paths]
+    layer_data = [(mlarray, {"affine": mlarray.affine, "metadata": mlarray.meta.to_dict()}, "labels" if mlarray.meta.is_seg == True else "image") for mlarray in mlarrays]
+    return layer_data

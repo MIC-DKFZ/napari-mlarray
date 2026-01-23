@@ -1,4 +1,4 @@
-# from napari_mlarray import write_single_image, write_multiple
+# from napari_mlarray import write_single_image
 
 # add your tests here...
 
