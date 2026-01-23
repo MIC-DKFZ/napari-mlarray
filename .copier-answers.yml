@@ -1,0 +1,19 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: v2.0.1
+_src_path: https://github.com/napari/napari-plugin-template
+display_name: Mlarray
+email: karol.gotkowski@dkfz.de
+full_name: Karol-G
+github_repository_url: provide later
+github_username_or_organization: MIC-DKFZ
+include_reader_plugin: true
+include_sample_data_plugin: false
+include_widget_plugin: true
+include_writer_plugin: true
+install_dependabot: true
+install_precommit: false
+license: MIT
+module_name: napari_mlarray
+plugin_name: napari-mlarray
+short_description: Reader/Writer for MLArray data, an array format specialized for
+    machine learning with Blosc2 backend and standardized metadata
