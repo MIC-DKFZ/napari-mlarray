@@ -73,5 +73,5 @@ def reader_function(path):
     paths = [path] if isinstance(path, str) else path
     # load all files into array
     mlarrays = [MLArray.open(_path) for _path in paths]
-    layer_data = [(mlarray, {"affine": mlarray.affine, "metadata": mlarray.meta.to_dict()}, "labels" if mlarray.meta.is_seg == True else "image") for mlarray in mlarrays]
+    layer_data = [(mlarray, {"affine": mlarray.affine, "metadata": mlarray.meta.to_dict()}, "labels" if mlarray.meta.is_seg.is_seg == True else "image") for mlarray in mlarrays]
     return layer_data
