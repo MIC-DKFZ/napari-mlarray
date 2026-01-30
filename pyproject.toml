@@ -1,7 +1,7 @@
 [project]
 name = "napari-mlarray"
 dynamic = ["version"]
-description = "Reader/Writer for MLArray data, an array format specialized for machine learning with Blosc2 backend and standardized metadata"
+description = "A reader/writer Napari plugin for MLArray images."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
