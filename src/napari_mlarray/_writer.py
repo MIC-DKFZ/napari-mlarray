@@ -34,7 +34,7 @@ def write_single_image(path: str, data: Any, meta: dict) -> list[str]:
     -------
     [path] : A list containing the string path to the saved file.
     """
-    mlarray = MLArray(data, meta=Meta.from_dict(meta["metadata"]))
+    mlarray = MLArray(data, meta=Meta.from_mapping(meta["metadata"]))
     mlarray.save(path)
 
     # return path to any file(s) that were successfully written
