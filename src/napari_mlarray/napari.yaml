@@ -18,5 +18,5 @@ contributions:
       filename_patterns: ['*.mla']
   writers:
     - command: napari-mlarray.write_single_image
-      layer_types: ['image']
+      layer_types: ['image', 'labels']
       filename_extensions: ['.mla']

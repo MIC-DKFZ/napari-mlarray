@@ -27,6 +27,15 @@ def napari_get_reader(path):
     return reader_function
 
 
+def _spatial_affine(mlarray):
+    """Return the spatial affine for any MLArray, including bbox-only files.
+
+    ``MLArray.affine`` returns ``None`` when no array data is present even if
+    ``meta.spatial.affine`` is populated, so we fall back to the metadata field.
+    """
+    return mlarray.affine if mlarray.affine is not None else mlarray.meta.spatial.affine
+
+
 def reader_function(path):
     """Take a path or list of paths and return a list of LayerData tuples."""
     paths = [path] if isinstance(path, str) else path
@@ -34,10 +43,10 @@ def reader_function(path):
     for path in paths:
         name = Path(path).stem
         mlarray = MLArray.open(path)
-        if mlarray.meta._has_array.has_array == True:
+        if mlarray.shape is not None:
             data = mlarray
             metadata = {"name": f"{name}", "affine": mlarray.affine, "metadata": mlarray.meta.to_mapping()}
-            layer_type = "labels" if mlarray.meta.is_seg.is_seg == True else "image"
+            layer_type = "labels" if bool(mlarray.meta.is_seg) else "image"
             layer_data.append((data, metadata, layer_type))
         if mlarray.meta.bbox.bboxes is not None:
             bboxes = np.asarray(mlarray.meta.bbox.bboxes)
@@ -47,6 +56,7 @@ def reader_function(path):
                 raise ValueError(f"Unsupported bbox shape: {bboxes.shape}")
 
             dims = bboxes.shape[1]
+            affine = _spatial_affine(mlarray)
 
             # 2D -> keep shapes rectangles (original behavior)
             if dims == 2:
@@ -65,7 +75,7 @@ def reader_function(path):
                 metadata = {
                     "name": f"{name} (BBoxes)",
                     "shape_type": "rectangle",
-                    "affine": mlarray.affine,
+                    "affine": affine,
                     "metadata": mlarray.meta.to_mapping(),
                     "face_color": "transparent",
                     "edge_color": edge_color,
@@ -84,7 +94,7 @@ def reader_function(path):
                 )
                 metadata = {
                     "name": f"{name} (BBoxes)",
-                    "affine": mlarray.affine,
+                    "affine": affine,
                     "metadata": mlarray.meta.to_mapping(),
                     "face_color": "transparent",
                     "edge_color": edge_color,
