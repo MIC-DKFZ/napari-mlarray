@@ -8,7 +8,7 @@ from mlarray import MLArray, Meta
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
 os.environ.setdefault("XDG_CONFIG_HOME", "/tmp")
 
-from napari.layers import Shapes, Surface, Vectors
+from napari.layers import Shapes, Surface
 from napari_mlarray._reader import (
     _BBOX3D_EDGE_VERTEX_INDICES,
     _BBOX3D_FACE_TRIANGLE_VERTEX_INDICES,
@@ -115,7 +115,7 @@ def test_reader_function_returns_shapes_layer_for_2d_bbox_only(tmp_path):
     )
 
 
-def test_reader_function_returns_surface_and_vectors_layers_for_3d_bboxes(tmp_path):
+def test_reader_function_returns_surface_layer_for_3d_bboxes(tmp_path):
     path = Path(tmp_path) / "bbox3d.mla"
     array = np.zeros((4, 5, 6), dtype=np.float32)
     image = MLArray(
@@ -137,14 +137,12 @@ def test_reader_function_returns_surface_and_vectors_layers_for_3d_bboxes(tmp_pa
 
     layer_data = reader_function(str(path))
 
-    assert len(layer_data) == 3
+    assert len(layer_data) == 2
     _, _, image_layer_type = layer_data[0]
     surface_data, surface_kwargs, surface_layer_type = layer_data[1]
-    vectors_data, vectors_kwargs, vectors_layer_type = layer_data[2]
 
     assert image_layer_type == "image"
     assert surface_layer_type == "surface"
-    assert vectors_layer_type == "vectors"
     assert surface_kwargs["blending"] == "translucent"
     assert surface_kwargs["opacity"] == 1.0
     assert surface_kwargs["shading"] == "flat"
@@ -157,30 +155,10 @@ def test_reader_function_returns_surface_and_vectors_layers_for_3d_bboxes(tmp_pa
         values,
         np.repeat(np.array([0, 1], dtype=np.float32), 8),
     )
-    assert vectors_data.shape == (24, 2, 3)
-    assert vectors_kwargs["vector_style"] == "line"
-    assert vectors_kwargs["edge_width"] == 2
-    assert vectors_kwargs["opacity"] == 1.0
-    assert vectors_kwargs["edge_color"].shape == (24, 4)
-    assert set(vectors_kwargs["features"]) == {"box_index", "score", "label"}
-    np.testing.assert_array_equal(
-        vectors_kwargs["features"]["box_index"],
-        np.repeat(np.array([0, 1], dtype=np.int32), 12),
-    )
-    np.testing.assert_allclose(
-        vectors_kwargs["features"]["score"],
-        np.repeat(np.array([0.9, 0.7], dtype=np.float32), 12),
-    )
-    np.testing.assert_array_equal(
-        vectors_kwargs["features"]["label"],
-        np.repeat(np.array(["tumor", "node"], dtype=object), 12),
-    )
     surface_layer = Surface(surface_data, **surface_kwargs)
-    vectors_layer = Vectors(vectors_data, **vectors_kwargs)
     assert str(surface_layer.shading) == "flat"
-    assert str(vectors_layer.vector_style) == "line"
     np.testing.assert_allclose(
-        vectors_kwargs["affine"],
+        surface_kwargs["affine"],
         np.array(
             [
                 [-3.0, 0.0, 0.0, 45.0],

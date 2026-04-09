@@ -224,7 +224,7 @@ def reader_function(path):
                 )
                 surface_data = bboxes_minmax_to_napari_surface_3d(bboxes)
                 surface_kwargs = {
-                    "name": f"{name} (BBoxes Fill)",
+                    "name": f"{name} (BBoxes)",
                     "affine": affine,
                     "metadata": mlarray.meta.to_mapping(),
                     "vertex_colors": np.repeat(
@@ -237,43 +237,6 @@ def reader_function(path):
                     "shading": "flat",
                 }
                 layer_data.append((surface_data, surface_kwargs, "surface"))
-
-                data = bboxes_minmax_to_napari_vectors_3d(bboxes)
-                edge_color = np.repeat(
-                    box_edge_color,
-                    repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
-                    axis=0,
-                )
-                features = {
-                    "box_index": np.repeat(
-                        np.arange(box_count, dtype=np.int32),
-                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
-                    )
-                }
-                scores = getattr(mlarray.meta.bbox, "scores", None)
-                labels = getattr(mlarray.meta.bbox, "labels", None)
-                if scores is not None and len(scores) == box_count:
-                    features["score"] = np.repeat(
-                        np.asarray(scores, dtype=np.float32),
-                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
-                    )
-                if labels is not None and len(labels) == box_count:
-                    features["label"] = np.repeat(
-                        np.asarray(labels, dtype=object),
-                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
-                    )
-                metadata = {
-                    "name": f"{name} (BBoxes Outline)",
-                    "affine": affine,
-                    "metadata": mlarray.meta.to_mapping(),
-                    "features": features,
-                    "edge_color": edge_color,
-                    "edge_width": 2,
-                    "vector_style": "line",
-                    "opacity": 1.0,
-                }
-                layer_type = "vectors"
-                layer_data.append((data, metadata, layer_type))
             else:
                 raise ValueError(
                     f"Only 2D and 3D bbox visualization is supported. Got {dims}D."
