@@ -13,6 +13,39 @@ import numpy as np
 import napari_bbox  # noqa: F401
 
 
+def _get_array_zyx(mlarray):
+    """Convert MLArray (XYZ) to napari ZYX order.
+    
+    MLArray uses canonical XYZ axis order (axis 0=X/R, 1=Y/A, 2=Z/S in RAS+).
+    Napari uses ZYX order (axis 0=Z is primary slider).
+    """
+    array_xyz = np.asarray(mlarray)
+    return np.transpose(array_xyz, (2, 1, 0))
+
+
+def _get_display_affine_zyx(mlarray):
+    """Build display affine in ZYX order with clinical conventions.
+    
+    Returns a diagonal affine with negative scales for:
+    - Z (dim 0): superior end at top
+    - Y (dim 1): anterior end at top  
+    - X (dim 2): right end at left (radiological view)
+    """
+    spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(mlarray.spatial_ndim)
+    origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(mlarray.spatial_ndim)
+    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:]
+    sx, sy, sz = spacing
+    ox, oy, oz = origin
+    Nx, Ny, Nz = shape_xyz
+    
+    affine_zyx = np.diag([-sz, -sy, -sx, 1.0])
+    affine_zyx[0, 3] = oz + (Nz - 1) * sz
+    affine_zyx[1, 3] = oy + (Ny - 1) * sy
+    affine_zyx[2, 3] = ox + (Nx - 1) * sx
+    
+    return affine_zyx
+
+
 def napari_get_reader(path):
     """A basic implementation of a Reader contribution."""
     if isinstance(path, list):
@@ -36,6 +69,26 @@ def _spatial_affine(mlarray):
     return mlarray.affine if mlarray.affine is not None else mlarray.meta.spatial.affine
 
 
+def _get_bbox_affine_zyx(mlarray):
+    """Convert MLArray spatial affine (XYZ) to napari display affine (ZYX)."""
+    spatial_ndim = mlarray.spatial_ndim
+    if spatial_ndim == 2:
+        spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(2)
+        origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(2)
+        shape_xyz = mlarray.shape[-2:] if mlarray.shape is not None else (1, 1)
+        sx, sy = spacing
+        ox, oy = origin
+        Nx, Ny = shape_xyz
+        
+        affine_zyx = np.diag([-sy, -sx, 1.0])
+        affine_zyx[0, 2] = oy + (Ny - 1) * sy
+        affine_zyx[1, 2] = ox + (Nx - 1) * sx
+        return affine_zyx
+    elif spatial_ndim >= 3:
+        return _get_display_affine_zyx(mlarray)
+    return None
+
+
 def reader_function(path):
     """Take a path or list of paths and return a list of LayerData tuples."""
     paths = [path] if isinstance(path, str) else path
@@ -43,11 +96,24 @@ def reader_function(path):
     for path in paths:
         name = Path(path).stem
         mlarray = MLArray.open(path)
+        
         if mlarray.shape is not None:
-            data = mlarray
-            metadata = {"name": f"{name}", "affine": mlarray.affine, "metadata": mlarray.meta.to_mapping()}
+            array_zyx = _get_array_zyx(mlarray)
+            affine_zyx = _get_display_affine_zyx(mlarray)
+            
+            metadata = {
+                "name": f"{name}",
+                "affine": affine_zyx,
+                "metadata": {
+                    **mlarray.meta.to_mapping(),
+                    "_true_affine_xyz": mlarray.affine,
+                    "_true_spacing_xyz": mlarray.spacing,
+                    "_true_origin_xyz": mlarray.origin,
+                    "_true_direction_xyz": mlarray.direction,
+                }
+            }
             layer_type = "labels" if bool(mlarray.meta.is_seg) else "image"
-            layer_data.append((data, metadata, layer_type))
+            layer_data.append((array_zyx, metadata, layer_type))
         if mlarray.meta.bbox.bboxes is not None:
             bboxes = np.asarray(mlarray.meta.bbox.bboxes)
 
@@ -56,7 +122,7 @@ def reader_function(path):
                 raise ValueError(f"Unsupported bbox shape: {bboxes.shape}")
 
             dims = bboxes.shape[1]
-            affine = _spatial_affine(mlarray)
+            affine = _get_bbox_affine_zyx(mlarray)
 
             # 2D -> keep shapes rectangles (original behavior)
             if dims == 2:
