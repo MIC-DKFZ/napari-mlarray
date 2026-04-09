@@ -5,12 +5,26 @@ It implements the Reader specification, but your plugin may choose to
 implement multiple readers or even other plugin contributions. see:
 https://napari.org/stable/plugins/building_a_plugin/guides.html#readers
 """
-from mlarray import MLArray
 from pathlib import Path
+
+from mlarray import MLArray
 import numpy as np
 
-# Ensure napari-bbox registers its custom layer type.
-import napari_bbox  # noqa: F401
+
+_BBOX3D_EDGE_VERTEX_INDICES = (
+    (0, 1),
+    (0, 2),
+    (0, 4),
+    (1, 3),
+    (1, 5),
+    (2, 3),
+    (2, 6),
+    (3, 7),
+    (4, 5),
+    (4, 6),
+    (5, 7),
+    (6, 7),
+)
 
 
 def _get_array_zyx(mlarray):
@@ -21,6 +35,16 @@ def _get_array_zyx(mlarray):
     """
     array_xyz = np.asarray(mlarray)
     return np.transpose(array_xyz, (2, 1, 0))
+
+
+def _bbox_mins_maxs_zyx(bboxes_xyz):
+    """Return bbox mins/maxs converted from XYZ to ZYX axis order."""
+    mins_xyz = np.asarray(bboxes_xyz, dtype=np.float32)[..., 0]
+    maxs_xyz = np.asarray(bboxes_xyz, dtype=np.float32)[..., 1]
+    mins_xyz, maxs_xyz = np.minimum(mins_xyz, maxs_xyz), np.maximum(
+        mins_xyz, maxs_xyz
+    )
+    return mins_xyz[:, ::-1], maxs_xyz[:, ::-1]
 
 
 def _get_display_affine_zyx(mlarray):
@@ -72,6 +96,8 @@ def _spatial_affine(mlarray):
 def _get_bbox_affine_zyx(mlarray):
     """Convert MLArray spatial affine (XYZ) to napari display affine (ZYX)."""
     spatial_ndim = mlarray.spatial_ndim
+    if spatial_ndim is None:
+        return None
     if spatial_ndim == 2:
         spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(2)
         origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(2)
@@ -151,23 +177,52 @@ def reader_function(path):
                 layer_type = "shapes"
                 layer_data.append((data, metadata, layer_type))
 
-            # 3D+ -> napari-bbox layer
-            elif dims >= 3:
-                data = bboxes_minmax_to_napari_bboxes_nd(bboxes)
-                edge_color = _napari_bbox_edge_colors_count(
-                    count=len(data),
+            elif dims == 3:
+                data = bboxes_minmax_to_napari_vectors_3d(bboxes)
+                box_count = len(bboxes)
+                box_edge_color = _napari_bbox_edge_colors_count(
+                    count=box_count,
                     labels=getattr(mlarray.meta.bbox, "labels", None),
                 )
+                edge_color = np.repeat(
+                    box_edge_color,
+                    repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
+                    axis=0,
+                )
+                features = {
+                    "box_index": np.repeat(
+                        np.arange(box_count, dtype=np.int32),
+                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
+                    )
+                }
+                scores = getattr(mlarray.meta.bbox, "scores", None)
+                labels = getattr(mlarray.meta.bbox, "labels", None)
+                if scores is not None and len(scores) == box_count:
+                    features["score"] = np.repeat(
+                        np.asarray(scores, dtype=np.float32),
+                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
+                    )
+                if labels is not None and len(labels) == box_count:
+                    features["label"] = np.repeat(
+                        np.asarray(labels, dtype=object),
+                        repeats=len(_BBOX3D_EDGE_VERTEX_INDICES),
+                    )
                 metadata = {
                     "name": f"{name} (BBoxes)",
                     "affine": affine,
                     "metadata": mlarray.meta.to_mapping(),
-                    "face_color": "transparent",
+                    "features": features,
                     "edge_color": edge_color,
-                    # "edge_width": 2,
+                    "edge_width": 2,
+                    "vector_style": "line",
+                    "opacity": 1.0,
                 }
-                layer_type = "boundingboxlayer"
+                layer_type = "vectors"
                 layer_data.append((data, metadata, layer_type))
+            else:
+                raise ValueError(
+                    f"Only 2D and 3D bbox visualization is supported. Got {dims}D."
+                )
     return layer_data
 
 
@@ -233,38 +288,53 @@ def bboxes_minmax_to_napari_rectangles_2d(
     return rects
 
 
-def bboxes_minmax_to_napari_bboxes_nd(
+def bboxes_minmax_to_napari_vectors_3d(
     bboxes,
     *,
     dtype=np.float32,
     validate: bool = True,
-):
-    """
-    Convert N-D axis-aligned bboxes from min/max to napari-bbox format.
-    Input (MLArray): (N, D, 2) where [:, :, 0] are mins and [:, :, 1] are maxs.
-    Returns:
-      - list of (2, D) arrays, one per bbox.
-    """
+) -> np.ndarray:
+    """Convert 3D min/max bbox data in XYZ order to napari vectors in ZYX order."""
     arr = np.asarray(bboxes)
-
-    if arr.ndim != 3 or arr.shape[2] != 2:
+    if arr.ndim != 3 or arr.shape[1:] != (3, 2):
         raise ValueError(
-            f"Expected bboxes of shape (N, D, 2). Got {arr.shape}."
+            f"Expected bboxes of shape (N, 3, 2). Got {arr.shape}."
         )
-
-    mins = arr[:, :, 0]
-    maxs = arr[:, :, 1]
-    # Ensure proper min/max ordering even if input is flipped
-    mins, maxs = np.minimum(mins, maxs), np.maximum(mins, maxs)
-    if validate and np.any(maxs < mins):
-        bad = np.argwhere(maxs < mins)
+    mins_zyx, maxs_zyx = _bbox_mins_maxs_zyx(arr)
+    if validate and np.any(maxs_zyx < mins_zyx):
+        bad = np.argwhere(maxs_zyx < mins_zyx)
         raise ValueError(
             "Found bbox with max < min at indices (bbox_index, dim): "
             f"{bad[:10].tolist()}" + (" ..." if len(bad) > 10 else "")
         )
-
-    arr2 = np.stack([mins, maxs], axis=1).astype(dtype, copy=False)
-    return [arr2[i] for i in range(arr2.shape[0])]
+    vectors = np.empty(
+        (len(arr) * len(_BBOX3D_EDGE_VERTEX_INDICES), 2, 3),
+        dtype=dtype,
+    )
+    cursor = 0
+    for mins, maxs in zip(mins_zyx, maxs_zyx, strict=False):
+        z0, y0, x0 = mins
+        z1, y1, x1 = maxs
+        corners = np.asarray(
+            [
+                [z0, y0, x0],
+                [z0, y0, x1],
+                [z0, y1, x0],
+                [z0, y1, x1],
+                [z1, y0, x0],
+                [z1, y0, x1],
+                [z1, y1, x0],
+                [z1, y1, x1],
+            ],
+            dtype=dtype,
+        )
+        for start_idx, end_idx in _BBOX3D_EDGE_VERTEX_INDICES:
+            start = corners[start_idx]
+            end = corners[end_idx]
+            vectors[cursor, 0] = start
+            vectors[cursor, 1] = end - start
+            cursor += 1
+    return vectors
 
 
 def _napari_bbox_edge_colors(rectangles, labels):
