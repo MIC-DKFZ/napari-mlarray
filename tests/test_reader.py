@@ -26,7 +26,8 @@ def test_get_reader_accepts_mlarray_suffix():
 
 
 def test_bboxes_minmax_to_napari_rectangles_2d_preserves_2d_behavior():
-    bboxes = np.array([[[10, 30], [20, 40]]], dtype=np.float32)
+    # Input is (N, D=2, 2) in SAR+ ZYX order: dim0=[10,20], dim1=[30,40]
+    bboxes = np.array([[[10, 20], [30, 40]]], dtype=np.float32)
 
     rectangles = bboxes_minmax_to_napari_rectangles_2d(bboxes)
 
@@ -38,7 +39,8 @@ def test_bboxes_minmax_to_napari_rectangles_2d_preserves_2d_behavior():
 
 
 def test_bboxes_minmax_to_napari_vectors_3d_builds_wireframe_edges():
-    bboxes = np.array([[[1, 4], [2, 5], [3, 6]]], dtype=np.float32)
+    # Input is (N, D=3, 2) in SAR+ ZYX order: Z=[3,6], Y=[2,5], X=[1,4]
+    bboxes = np.array([[[3, 6], [2, 5], [1, 4]]], dtype=np.float32)
 
     vectors = bboxes_minmax_to_napari_vectors_3d(bboxes)
 
@@ -69,7 +71,8 @@ def test_bboxes_minmax_to_napari_vectors_3d_builds_wireframe_edges():
 
 
 def test_bboxes_minmax_to_napari_surface_3d_builds_cuboid_mesh():
-    bboxes = np.array([[[1, 4], [2, 5], [3, 6]]], dtype=np.float32)
+    # Input is (N, D=3, 2) in SAR+ ZYX order: Z=[3,6], Y=[2,5], X=[1,4]
+    bboxes = np.array([[[3, 6], [2, 5], [1, 4]]], dtype=np.float32)
 
     vertices, faces, values = bboxes_minmax_to_napari_surface_3d(bboxes)
 
@@ -109,9 +112,12 @@ def test_reader_function_returns_shapes_layer_for_2d_bbox_only(tmp_path):
     assert "text" in kwargs
     layer = Shapes(data, **kwargs)
     assert layer.shape_type[0] == "rectangle"
+    # MLArray stored dim0=[10,30], dim1=[20,40] in (N,D,2) format.
+    # SAR+ reversal (no affine): new dim0=[20,40], new dim1=[10,30].
+    # Rectangle corners: [20,10], [20,30], [40,30], [40,10].
     np.testing.assert_allclose(
         data,
-        np.array([[[10, 30], [10, 40], [20, 40], [20, 30]]], dtype=np.float32),
+        np.array([[[20, 10], [20, 30], [40, 30], [40, 10]]], dtype=np.float32),
     )
 
 
@@ -157,14 +163,8 @@ def test_reader_function_returns_surface_layer_for_3d_bboxes(tmp_path):
     )
     surface_layer = Surface(surface_data, **surface_kwargs)
     assert str(surface_layer.shading) == "flat"
-    np.testing.assert_allclose(
-        surface_kwargs["affine"],
-        np.array(
-            [
-                [-3.0, 0.0, 0.0, 45.0],
-                [0.0, -2.0, 0.0, 28.0],
-                [0.0, 0.0, -1.5, 14.5],
-                [0.0, 0.0, 0.0, 1.0],
-            ]
-        ),
-    )
+    # scale / translate follow the same SAR+ negative-scale convention as the image layer.
+    # array (4,5,6) XYZ → SAR+ ZYX (6,5,4); spacing=(1.5,2,3) → SAR sp=[3,2,1.5];
+    # origin=(10,20,30) → SAR orig=[30,20,10].
+    np.testing.assert_allclose(surface_kwargs["scale"], [-3.0, -2.0, -1.5])
+    np.testing.assert_allclose(surface_kwargs["translate"], [45.0, 28.0, 14.5])
