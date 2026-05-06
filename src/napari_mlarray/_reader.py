@@ -283,57 +283,115 @@ def _spatial_affine(mlarray):
 
 def _get_bbox_affine_zyx(mlarray):
     """Get SAR+ affine for napari display with negative scales."""
-    from_cs = _parse_coordinate_system(mlarray)
-    if from_cs is None:
-        from_cs = "RAS+"
+    # Use medvol to get SAR+ geometry directly
+    # This handles coordinate system conversion correctly
+    from medvol import MedVol
     
-    affine_xyz = _spatial_affine(mlarray)
-    if affine_xyz is None:
-        spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(mlarray.spatial_ndim)
-        origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(mlarray.spatial_ndim)
-        affine_xyz = np.eye(mlarray.spatial_ndim + 1)
-        affine_xyz[:-1, :-1] = np.diag(spacing)
-        affine_xyz[:-1, -1] = origin
+    # Get spatial_ndim (may be None for bbox-only files)
+    if mlarray.spatial_ndim is None:
+        spatial_ndim = 2  # default to 2D for bbox-only files
+    else:
+        spatial_ndim = mlarray.spatial_ndim
     
-    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:] if mlarray.shape is not None else None
+    # Determine coordinate system based on spatial_ndim
+    if spatial_ndim == 2:
+        sarplus_cs = "SA+"
+    else:
+        sarplus_cs = "SAR+"
     
-    # Convert to SAR+ coordinate system
-    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, "SAR+", shape_xyz)
+    # Build MedVol with the MLArray's affine
+    affine = _spatial_affine(mlarray)
+    if affine is None:
+        # For bbox-only files, try to get spatial affine from meta
+        if hasattr(mlarray, 'meta') and hasattr(mlarray.meta, 'spatial') and mlarray.meta.spatial is not None:
+            affine = mlarray.meta.spatial.affine
+        if affine is None:
+            # Create identity affine based on inferred spatial_ndim
+            affine = np.eye(spatial_ndim + 1)
     
-    # Deoblique to get diagonal spacing/origin
-    deoblique_affine_xyz = deoblique_affine(sarplus_affine_xyz)
+    # Get shape (may be None for bbox-only files)
+    if mlarray.shape is not None and mlarray.spatial_ndim is not None:
+        shape = mlarray.shape[-mlarray.spatial_ndim:]
+    else:
+        shape = None
     
-    # Extract spacing and origin
-    spacing = np.linalg.norm(deoblique_affine_xyz[:-1, :-1], axis=0)
-    origin = deoblique_affine_xyz[:-1, -1]
+    # Create MedVol and get SAR+ geometry
+    # Use shape to create zero array, or fallback to (1,1,1)
+    if shape is not None:
+        array_for_medvol = np.zeros(shape, dtype=np.float32)
+    else:
+        # Infer shape from bbox if available
+        if hasattr(mlarray, 'meta') and hasattr(mlarray.meta, 'bbox') and mlarray.meta.bbox is not None:
+            if hasattr(mlarray.meta.bbox, 'get'):
+                bboxes = mlarray.meta.bbox.get('bboxes', [])
+            else:
+                bboxes = getattr(mlarray.meta.bbox, 'bboxes', None) or []
+            if len(bboxes) > 0:
+                bbox_array = np.asarray(bboxes)
+                D = bbox_array.shape[1] if bbox_array.ndim >= 2 else spatial_ndim
+                if D == 3:
+                    array_for_medvol = np.zeros((1, 1, 1), dtype=np.float32)
+                elif D == 2:
+                    array_for_medvol = np.zeros((1, 1), dtype=np.float32)
+                else:
+                    array_for_medvol = np.zeros((1,) * D, dtype=np.float32)
+            else:
+                array_for_medvol = np.zeros((1,) * spatial_ndim, dtype=np.float32)
+        else:
+            array_for_medvol = np.zeros((1,) * spatial_ndim, dtype=np.float32)
+    
+    medvol = MedVol(
+        array_for_medvol,
+        affine=affine,
+        canonicalize=True
+    )
+    
+    geom = medvol.get_geometry(sarplus_cs, deoblique=True)
+    
+    # Extract spacing and origin in SAR+ order
+    spacing = geom["spacing"]  # For 3D: [sz, sy, sx], For 2D: [sy, sx]
+    origin = geom["origin"]    # For 3D: [oz, oy, ox], For 2D: [oy, ox]
+    
+    # Get shape in SAR+ order
+    # MLArray shape is in XYZ order [X, Y, Z], permute to SAR+ [Z, Y, X]
+    if shape is not None:
+        if spatial_ndim == 3:
+            shape_sar = (shape[2], shape[1], shape[0])
+        else:  # spatial_ndim == 2
+            shape_sar = (shape[1], shape[0])
+    else:
+        # Use inferred shape from array_for_medvol
+        shape_sar = array_for_medvol.shape[-spatial_ndim:]
+        if spatial_ndim == 2:
+            shape_sar = (shape_sar[1], shape_sar[0])  # [Y, X] -> [X, Y] then permute
+        else:
+            shape_sar = (shape_sar[2], shape_sar[1], shape_sar[0])
     
     # Build napari affine with negative scales
-    if mlarray.spatial_ndim == 2:
-        if shape_xyz is None:
-            shape_xyz = (1, 1)
-        sx, sy = spacing[0], spacing[1]  # X, Y in XYZ
-        ox, oy = origin[0], origin[1]
-        Nx, Ny = shape_xyz[0], shape_xyz[1]
-        
-        # SAR+ in 2D would be [Y, X] (Anterior, Right) - but napari uses ZYX order
-        # For 2D, we'll just use negative scales
-        affine_zyx = np.diag([-sy, -sx, 1.0, 1.0])
-        affine_zyx[0, 2] = oy + (Ny - 1) * sy
-        affine_zyx[1, 2] = ox + (Nx - 1) * sx
-        return affine_zyx
-    elif mlarray.spatial_ndim >= 3:
-        if shape_xyz is None:
-            shape_xyz = (1, 1, 1)
-        # SAR+ spacing is [S, A, R] = [Z, Y, X] in ZYX order
-        sz, sy, sx = spacing[0], spacing[1], spacing[2]
-        oz, oy, ox = origin[0], origin[1], origin[2]
-        Nz, Ny, Nx = shape_xyz[0], shape_xyz[1], shape_xyz[2]
+    if spatial_ndim >= 3:
+        # SAR+ spacing: [sz, sy, sx] = [S, A, R]
+        # SAR+ origin: [oz, oy, ox] = [S, A, R]
+        # Shape: [Nz, Ny, Nx] = [S, A, R] dimensions
+        Nz, Ny, Nx = shape_sar[0], shape_sar[1], shape_sar[2]
         
         # napari expects ZYX order with negative scales
-        affine_zyx = np.diag([-sx, -sy, -sz, 1.0])
-        affine_zyx[0, 3] = oz + (Nz - 1) * sz
-        affine_zyx[1, 3] = oy + (Ny - 1) * sy
-        affine_zyx[2, 3] = ox + (Nx - 1) * sx
+        # Z=S, Y=A, X=R, so we use spacing and origin directly
+        affine_zyx = np.diag([-spacing[0], -spacing[1], -spacing[2], 1.0])
+        affine_zyx[0, 3] = origin[0] + (Nz - 1) * spacing[0]
+        affine_zyx[1, 3] = origin[1] + (Ny - 1) * spacing[1]
+        affine_zyx[2, 3] = origin[2] + (Nx - 1) * spacing[2]
+        return affine_zyx
+    elif spatial_ndim == 2:
+        # 2D SAR+ spacing: [sy, sx] = [S, A]
+        # 2D SAR+ origin: [oy, ox] = [S, A]
+        # Shape: [Ny, Nx] = [S, A] dimensions
+        Ny, Nx = shape_sar[0], shape_sar[1]
+        
+        # napari expects ZYX order (with Z padded), negative scales for first 2 dims
+        # Z=S, Y=A, so we use spacing and origin directly for Y and X
+        affine_zyx = np.diag([-spacing[0], -spacing[1], 1.0, 1.0])
+        affine_zyx[0, 2] = origin[0] + (Ny - 1) * spacing[0]
+        affine_zyx[1, 2] = origin[1] + (Nx - 1) * spacing[1]
         return affine_zyx
     return None
 
@@ -348,11 +406,16 @@ def _get_array_zyx_with_sarplus(mlarray):
     if from_cs is None:
         from_cs = "RAS+"
     
-    if from_cs == "SAR+":
+    if mlarray.spatial_ndim == 2:
+        sarplus_cs = "SA+"
+    else:
+        sarplus_cs = "SAR+"
+    
+    if from_cs == sarplus_cs:
         return np.transpose(array_xyz, (2, 1, 0))
     
     from_order, from_flips = parse_coordinate_system(from_cs, mlarray.spatial_ndim)
-    to_order, to_flips = parse_coordinate_system("SAR+", mlarray.spatial_ndim)
+    to_order, to_flips = parse_coordinate_system(sarplus_cs, mlarray.spatial_ndim)
     
     full_axis_order = list(to_order) + list(range(mlarray.spatial_ndim, mlarray.ndim))
     array_converted = np.transpose(array_xyz, full_axis_order)
@@ -381,7 +444,12 @@ def _convert_bboxes_to_sarplus(bboxes_xyz, mlarray):
     if from_cs is None:
         from_cs = "RAS+"
     
-    if from_cs == "SAR+":
+    if mlarray.spatial_ndim == 2:
+        sarplus_cs = "SA+"
+    else:
+        sarplus_cs = "SAR+"
+    
+    if from_cs == sarplus_cs:
         return bboxes_xyz
     
     affine_xyz = _spatial_affine(mlarray)
@@ -389,7 +457,7 @@ def _convert_bboxes_to_sarplus(bboxes_xyz, mlarray):
         return bboxes_xyz
     
     shape_xyz = mlarray.shape[-mlarray.spatial_ndim:] if mlarray.shape is not None else None
-    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, "SAR+", shape_xyz)
+    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, sarplus_cs, shape_xyz)
     
     bboxes_array = np.asarray(bboxes_xyz, dtype=np.float32)
     
