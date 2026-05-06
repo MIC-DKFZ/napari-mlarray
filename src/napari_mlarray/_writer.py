@@ -39,21 +39,25 @@ def write_single_image(path: str, data: Any, meta: dict) -> list[str]:
     # Permute back to XYZ so MLArray saves in canonical orientation.
     array_xyz = np.transpose(data, (2, 1, 0))
     
-    # Retrieve true XYZ affine from metadata if available
+    # Retrieve original XYZ affine from metadata if available
     metadata = meta["metadata"]
-    true_affine = metadata.get("_true_affine_xyz")
-    true_spacing = metadata.get("_true_spacing_xyz")
-    true_origin = metadata.get("_true_origin_xyz")
-    true_direction = metadata.get("_true_direction_xyz")
+    original_affine = metadata.get("_original_affine_xyz")
+    original_spacing = metadata.get("_original_spacing_xyz")
+    original_origin = metadata.get("_original_origin_xyz")
+    original_direction = metadata.get("_original_direction_xyz")
+    original_coordinate_system = metadata.get("_original_coordinate_system")
     
     # Reconstruct MLArray with proper affine
     mlarray_meta = Meta.from_mapping(metadata)
-    if true_affine is not None:
-        mlarray_meta.spatial.affine = true_affine
-    elif true_spacing is not None and true_origin is not None and true_direction is not None:
-        mlarray_meta.spatial.spacing = true_spacing
-        mlarray_meta.spatial.origin = true_origin
-        mlarray_meta.spatial.direction = true_direction
+    if original_affine is not None:
+        mlarray_meta.spatial.affine = original_affine
+    elif original_spacing is not None and original_origin is not None and original_direction is not None:
+        mlarray_meta.spatial.spacing = original_spacing
+        mlarray_meta.spatial.origin = original_origin
+        mlarray_meta.spatial.direction = original_direction
+    
+    if original_coordinate_system is not None:
+        mlarray_meta.coordinate_system = original_coordinate_system
     
     mlarray = MLArray(array_xyz, meta=mlarray_meta)
     mlarray.save(path)

@@ -10,6 +10,17 @@ from pathlib import Path
 from mlarray import MLArray
 import numpy as np
 
+from medvol.geometry import (
+    SNAP_ATOL,
+    CANONICAL_AXIS_LABELS,
+    SIMPLEITK_AXIS_LABELS,
+    CoordinateContext,
+    canonical_coordinate_context,
+    coordinate_system_from_affine,
+    parse_coordinate_system,
+    deoblique_affine,
+)
+
 
 _BBOX3D_EDGE_VERTEX_INDICES = (
     (0, 1),
@@ -86,25 +97,160 @@ def _with_alpha(colors, alpha):
     return rgba
 
 
-def _get_display_affine_zyx(mlarray):
-    """Build display affine in ZYX order with clinical conventions.
+def _parse_coordinate_system(mlarray):
+    """Parse coordinate system from MLArray metadata.
     
-    Returns a diagonal affine with negative scales for:
-    - Z (dim 0): superior end at top
-    - Y (dim 1): anterior end at top  
-    - X (dim 2): right end at left (radiological view)
+    Returns coordinate system string (e.g., "RAS+", "LPS+", "SAR+") or None.
     """
-    spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(mlarray.spatial_ndim)
-    origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(mlarray.spatial_ndim)
-    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:]
-    sx, sy, sz = spacing
-    ox, oy, oz = origin
-    Nx, Ny, Nz = shape_xyz
+    affine_xyz = _spatial_affine(mlarray)
+    if affine_xyz is None:
+        return None
     
-    affine_zyx = np.diag([-sz, -sy, -sx, 1.0])
-    affine_zyx[0, 3] = oz + (Nz - 1) * sz
-    affine_zyx[1, 3] = oy + (Ny - 1) * sy
-    affine_zyx[2, 3] = ox + (Nx - 1) * sx
+    spatial_ndim = mlarray.spatial_ndim
+    if spatial_ndim is None:
+        return None
+    
+    axis_labels = CANONICAL_AXIS_LABELS[:spatial_ndim]
+    context = CoordinateContext(
+        axis_labels=axis_labels,
+        anatomical_ndim=spatial_ndim,
+        anatomical_axes=tuple(range(spatial_ndim)),
+    )
+    
+    return coordinate_system_from_affine(affine_xyz, context, atol=SNAP_ATOL)
+
+
+def _convert_to_coordinate_system(affine_xyz, from_cs, to_cs, shape_xyz=None):
+    """Convert affine from one coordinate system to another.
+    
+    Args:
+        affine_xyz: (N+1, N+1) affine matrix in XYZ order
+        from_cs: Source coordinate system string (e.g., "RAS+", "LPS+")
+        to_cs: Target coordinate system string (e.g., "SAR+")
+        shape_xyz: Optional array shape for flip offset calculation
+    
+    Returns:
+        Converted (N+1, N+1) affine in XYZ order
+    """
+    affine_array = np.asarray(affine_xyz, dtype=float)
+    ndim = affine_array.shape[0] - 1
+    
+    if from_cs == to_cs:
+        return affine_array.copy()
+    
+    from_order, from_flips = parse_coordinate_system(from_cs, ndim)
+    to_order, to_flips = parse_coordinate_system(to_cs, ndim)
+    
+    # Build permutation matrix P that converts from_cs to to_cs
+    # P maps to_cs voxel coords to from_cs voxel coords
+    # P such that P @ v_to = v_from (converts to_cs coords to from_cs coords)
+    P = np.zeros((ndim + 1, ndim + 1), dtype=float)
+    for to_axis in range(ndim):
+        from_axis = to_order[to_axis]
+        P[from_axis, to_axis] = 1.0
+    P[ndim, ndim] = 1.0  # Last row/col for homogeneous coordinates
+    
+    # P_inv is the inverse of P (transpose for permutation matrices)
+    P_inv = P.T.copy()
+    P_inv[ndim, ndim] = 1.0  # Ensure last diagonal is 1
+    
+    # Convert affine: affine_to = P^-1 @ affine_from @ P
+    # affine_from @ P converts to_cs voxel coords to world via from_cs
+    # P^-1 @ (...) converts the result back to to_cs voxel coords
+    converted = P_inv @ affine_array @ P
+    
+    # Handle flips by applying flip matrices
+    flip_from = np.eye(ndim + 1, dtype=float)
+    flip_to = np.eye(ndim + 1, dtype=float)
+    for m in range(ndim):
+        if from_flips[m]:
+            flip_from[m, m] = -1.0
+        if to_flips[m]:
+            flip_to[m, m] = -1.0
+    
+    # Apply flips: affine_with_flips = flip_to^-1 @ affine @ flip_from^-1
+    # Since flip matrices are diagonal with ±1, their inverse equals themselves
+    converted = flip_to @ converted @ flip_from
+    
+    # Handle flip offsets for the translation component
+    if shape_xyz is not None:
+        for m in range(ndim):
+            if from_flips[m] and not to_flips[m]:
+                converted[:, -1] += converted[:, m] * (shape_xyz[from_order[m]] - 1)
+            elif not from_flips[m] and to_flips[m]:
+                converted[:, -1] -= converted[:, m] * (shape_xyz[to_order[m]] - 1)
+    
+    return converted
+
+
+def _get_sarplus_geometry_zyx(mlarray):
+    """Get SAR+ geometry with deoblique affine for napari display.
+    
+    Returns:
+        tuple: (spacing_zyx, origin_zyx, deoblique_affine_zyx)
+    """
+    affine_xyz = _spatial_affine(mlarray)
+    if affine_xyz is None:
+        spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(mlarray.spatial_ndim)
+        origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(mlarray.spatial_ndim)
+        affine_xyz = np.eye(mlarray.spatial_ndim + 1)
+        affine_xyz[:-1, :-1] = np.diag(spacing)
+        affine_xyz[:-1, -1] = origin
+    
+    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:] if mlarray.shape is not None else None
+    
+    from_cs = _parse_coordinate_system(mlarray)
+    if from_cs is None:
+        from_cs = "RAS+"
+    
+    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, "SAR+", shape_xyz)
+    
+    # SAR+ is already in ZYX order (S=A[2], A=Y[1], R=X[0])
+    # So no need for XYZ->ZYX conversion
+    deoblique_affine_xyz = deoblique_affine(sarplus_affine_xyz)
+    
+    # Extract spacing and origin from deoblique affine
+    spacing = np.linalg.norm(deoblique_affine_xyz[:-1, :-1], axis=0)
+    origin = deoblique_affine_xyz[:-1, -1]
+    
+    return spacing, origin, deoblique_affine_xyz
+    
+    spacing = np.linalg.norm(deoblique_affine_zyx[:-1, :-1], axis=0)
+    origin = deoblique_affine_zyx[:-1, -1]
+    
+    return spacing, origin, deoblique_affine_zyx
+
+
+def _convert_xyz_to_zyx_affine(affine_xyz):
+    """Convert affine from XYZ to ZYX order."""
+    affine_array = np.asarray(affine_xyz, dtype=float)
+    ndim = affine_array.shape[0] - 1
+    
+    affine_zyx = np.eye(ndim + 1, dtype=float)
+    
+    if ndim >= 3:
+        affine_zyx[0, 0] = affine_xyz[2, 2]
+        affine_zyx[0, 1] = affine_xyz[2, 1]
+        affine_zyx[0, 2] = affine_xyz[2, 0]
+        affine_zyx[0, 3] = affine_xyz[2, 3]
+        
+        affine_zyx[1, 0] = affine_xyz[1, 2]
+        affine_zyx[1, 1] = affine_xyz[1, 1]
+        affine_zyx[1, 2] = affine_xyz[1, 0]
+        affine_zyx[1, 3] = affine_xyz[1, 3]
+        
+        affine_zyx[2, 0] = affine_xyz[0, 2]
+        affine_zyx[2, 1] = affine_xyz[0, 1]
+        affine_zyx[2, 2] = affine_xyz[0, 0]
+        affine_zyx[2, 3] = affine_xyz[0, 3]
+    elif ndim == 2:
+        affine_zyx[0, 0] = affine_xyz[1, 1]
+        affine_zyx[0, 1] = affine_xyz[1, 0]
+        affine_zyx[0, 2] = affine_xyz[1, 2]
+        
+        affine_zyx[1, 0] = affine_xyz[0, 1]
+        affine_zyx[1, 1] = affine_xyz[0, 0]
+        affine_zyx[1, 2] = affine_xyz[0, 2]
     
     return affine_zyx
 
@@ -129,29 +275,159 @@ def _spatial_affine(mlarray):
     ``MLArray.affine`` returns ``None`` when no array data is present even if
     ``meta.spatial.affine`` is populated, so we fall back to the metadata field.
     """
-    return mlarray.affine if mlarray.affine is not None else mlarray.meta.spatial.affine
+    affine = mlarray.affine if mlarray.affine is not None else mlarray.meta.spatial.affine
+    if affine is not None:
+        affine = np.asarray(affine)
+    return affine
 
 
 def _get_bbox_affine_zyx(mlarray):
-    """Convert MLArray spatial affine (XYZ) to napari display affine (ZYX)."""
-    spatial_ndim = mlarray.spatial_ndim
-    if spatial_ndim is None:
-        return None
-    if spatial_ndim == 2:
-        spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(2)
-        origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(2)
-        shape_xyz = mlarray.shape[-2:] if mlarray.shape is not None else (1, 1)
-        sx, sy = spacing
-        ox, oy = origin
-        Nx, Ny = shape_xyz
+    """Get SAR+ affine for napari display with negative scales."""
+    from_cs = _parse_coordinate_system(mlarray)
+    if from_cs is None:
+        from_cs = "RAS+"
+    
+    affine_xyz = _spatial_affine(mlarray)
+    if affine_xyz is None:
+        spacing = np.array(mlarray.spacing) if mlarray.spacing is not None else np.ones(mlarray.spatial_ndim)
+        origin = np.array(mlarray.origin) if mlarray.origin is not None else np.zeros(mlarray.spatial_ndim)
+        affine_xyz = np.eye(mlarray.spatial_ndim + 1)
+        affine_xyz[:-1, :-1] = np.diag(spacing)
+        affine_xyz[:-1, -1] = origin
+    
+    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:] if mlarray.shape is not None else None
+    
+    # Convert to SAR+ coordinate system
+    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, "SAR+", shape_xyz)
+    
+    # Deoblique to get diagonal spacing/origin
+    deoblique_affine_xyz = deoblique_affine(sarplus_affine_xyz)
+    
+    # Extract spacing and origin
+    spacing = np.linalg.norm(deoblique_affine_xyz[:-1, :-1], axis=0)
+    origin = deoblique_affine_xyz[:-1, -1]
+    
+    # Build napari affine with negative scales
+    if mlarray.spatial_ndim == 2:
+        if shape_xyz is None:
+            shape_xyz = (1, 1)
+        sx, sy = spacing[0], spacing[1]  # X, Y in XYZ
+        ox, oy = origin[0], origin[1]
+        Nx, Ny = shape_xyz[0], shape_xyz[1]
         
-        affine_zyx = np.diag([-sy, -sx, 1.0])
+        # SAR+ in 2D would be [Y, X] (Anterior, Right) - but napari uses ZYX order
+        # For 2D, we'll just use negative scales
+        affine_zyx = np.diag([-sy, -sx, 1.0, 1.0])
         affine_zyx[0, 2] = oy + (Ny - 1) * sy
         affine_zyx[1, 2] = ox + (Nx - 1) * sx
         return affine_zyx
-    elif spatial_ndim >= 3:
-        return _get_display_affine_zyx(mlarray)
+    elif mlarray.spatial_ndim >= 3:
+        if shape_xyz is None:
+            shape_xyz = (1, 1, 1)
+        # SAR+ spacing is [S, A, R] = [Z, Y, X] in ZYX order
+        sz, sy, sx = spacing[0], spacing[1], spacing[2]
+        oz, oy, ox = origin[0], origin[1], origin[2]
+        Nz, Ny, Nx = shape_xyz[0], shape_xyz[1], shape_xyz[2]
+        
+        # napari expects ZYX order with negative scales
+        affine_zyx = np.diag([-sx, -sy, -sz, 1.0])
+        affine_zyx[0, 3] = oz + (Nz - 1) * sz
+        affine_zyx[1, 3] = oy + (Ny - 1) * sy
+        affine_zyx[2, 3] = ox + (Nx - 1) * sx
+        return affine_zyx
     return None
+
+
+def _get_array_zyx_with_sarplus(mlarray):
+    """Convert MLArray (XYZ) to napari ZYX order with SAR+ coordinate system.
+    
+    Returns the array in ZYX order with SAR+ orientation.
+    """
+    array_xyz = np.asarray(mlarray)
+    from_cs = _parse_coordinate_system(mlarray)
+    if from_cs is None:
+        from_cs = "RAS+"
+    
+    if from_cs == "SAR+":
+        return np.transpose(array_xyz, (2, 1, 0))
+    
+    from_order, from_flips = parse_coordinate_system(from_cs, mlarray.spatial_ndim)
+    to_order, to_flips = parse_coordinate_system("SAR+", mlarray.spatial_ndim)
+    
+    full_axis_order = list(to_order) + list(range(mlarray.spatial_ndim, mlarray.ndim))
+    array_converted = np.transpose(array_xyz, full_axis_order)
+    
+    for m, flip in enumerate(to_flips):
+        if flip:
+            array_converted = np.flip(array_converted, axis=m)
+    
+    return np.transpose(array_converted, (2, 1, 0))
+
+
+def _convert_bboxes_to_sarplus(bboxes_xyz, mlarray):
+    """Convert bboxes from their original coordinate system to SAR+.
+    
+    MLArray stores bboxes in (N, D, 2) format where:
+    - N = number of bboxes
+    - D = spatial dimensions  
+    - 2 = [min, max] values
+    
+    Axis 1 is spatial dimension order (0=X, 1=Y, 2=Z for 3D)
+    Axis 2 is [min, max] values
+    
+    After conversion, bboxes are still in (N, D, 2) format but with SAR+ coordinates.
+    """
+    from_cs = _parse_coordinate_system(mlarray)
+    if from_cs is None:
+        from_cs = "RAS+"
+    
+    if from_cs == "SAR+":
+        return bboxes_xyz
+    
+    affine_xyz = _spatial_affine(mlarray)
+    if affine_xyz is None:
+        return bboxes_xyz
+    
+    shape_xyz = mlarray.shape[-mlarray.spatial_ndim:] if mlarray.shape is not None else None
+    sarplus_affine_xyz = _convert_to_coordinate_system(affine_xyz, from_cs, "SAR+", shape_xyz)
+    
+    bboxes_array = np.asarray(bboxes_xyz, dtype=np.float32)
+    
+    ndim = mlarray.spatial_ndim
+    if ndim == 2:
+        mins_xyz = bboxes_array[:, :, 0]
+        maxs_xyz = bboxes_array[:, :, 1]
+        
+        mins_h = np.hstack([mins_xyz, np.ones((len(mins_xyz), 1), dtype=np.float32)]).T
+        maxs_h = np.hstack([maxs_xyz, np.ones((len(maxs_xyz), 1), dtype=np.float32)]).T
+        
+        mins_sar_xyz = sarplus_affine_xyz @ mins_h
+        maxs_sar_xyz = sarplus_affine_xyz @ maxs_h
+        
+        mins_sar_xyz = mins_sar_xyz[:2, :].T
+        maxs_sar_xyz = maxs_sar_xyz[:2, :].T
+        
+        bboxes_sar = np.stack([mins_sar_xyz, maxs_sar_xyz], axis=2)
+        
+        return bboxes_sar
+    elif ndim == 3:
+        mins_xyz = bboxes_array[:, :, 0]
+        maxs_xyz = bboxes_array[:, :, 1]
+        
+        mins_h = np.hstack([mins_xyz, np.ones((len(mins_xyz), 1), dtype=np.float32)]).T
+        maxs_h = np.hstack([maxs_xyz, np.ones((len(maxs_xyz), 1), dtype=np.float32)]).T
+        
+        mins_sar_xyz = sarplus_affine_xyz @ mins_h
+        maxs_sar_xyz = sarplus_affine_xyz @ maxs_h
+        
+        mins_sar_xyz = mins_sar_xyz[:3, :].T
+        maxs_sar_xyz = maxs_sar_xyz[:3, :].T
+        
+        bboxes_sar = np.stack([mins_sar_xyz, maxs_sar_xyz], axis=2)
+        
+        return bboxes_sar
+    
+    return bboxes_xyz
 
 
 def reader_function(path):
@@ -162,36 +438,57 @@ def reader_function(path):
         name = Path(path).stem
         mlarray = MLArray.open(path)
         
+        coordinate_system = _parse_coordinate_system(mlarray)
+        if coordinate_system is None:
+            coordinate_system = "RAS+"
+        
         if mlarray.shape is not None:
-            array_zyx = _get_array_zyx(mlarray)
-            affine_zyx = _get_display_affine_zyx(mlarray)
+            array_zyx = _get_array_zyx_with_sarplus(mlarray)
+            
+            spacing_zyx, origin_zyx, deoblique_affine_zyx = _get_sarplus_geometry_zyx(mlarray)
+            
+            ndim = mlarray.ndim
+            display_scale = []
+            display_translate = []
+            shape_zyx = array_zyx.shape[:ndim]
+            
+            for i in range(3):
+                display_scale.append(-spacing_zyx[i])
+                display_translate.append(origin_zyx[i] + (shape_zyx[i] - 1) * spacing_zyx[i])
+            
+            for i in range(3, ndim):
+                display_scale.append(spacing_zyx[i] if i < len(spacing_zyx) else 1.0)
+                display_translate.append(origin_zyx[i] if i < len(origin_zyx) else 0.0)
             
             metadata = {
                 "name": f"{name}",
-                "affine": affine_zyx,
+                "scale": display_scale,
+                "translate": display_translate,
                 "metadata": {
                     **mlarray.meta.to_mapping(),
-                    "_true_affine_xyz": mlarray.affine,
-                    "_true_spacing_xyz": mlarray.spacing,
-                    "_true_origin_xyz": mlarray.origin,
-                    "_true_direction_xyz": mlarray.direction,
+                    "_original_affine_xyz": mlarray.affine,
+                    "_original_spacing_xyz": mlarray.spacing,
+                    "_original_origin_xyz": mlarray.origin,
+                    "_original_direction_xyz": mlarray.direction,
+                    "_original_coordinate_system": coordinate_system,
                 }
             }
             layer_type = "labels" if bool(mlarray.meta.is_seg) else "image"
             layer_data.append((array_zyx, metadata, layer_type))
         if mlarray.meta.bbox.bboxes is not None:
-            bboxes = np.asarray(mlarray.meta.bbox.bboxes)
+            bboxes_xyz = np.asarray(mlarray.meta.bbox.bboxes)
 
-            # MLArray bboxes are always (N, D, 2)
-            if bboxes.ndim != 3 or bboxes.shape[2] != 2:
-                raise ValueError(f"Unsupported bbox shape: {bboxes.shape}")
+            if bboxes_xyz.ndim != 3 or bboxes_xyz.shape[2] != 2:
+                raise ValueError(f"Unsupported bbox shape: {bboxes_xyz.shape}")
 
-            dims = bboxes.shape[1]
-            affine = _get_bbox_affine_zyx(mlarray)
+            dims = bboxes_xyz.shape[1]
+            
+            bboxes_sar = _convert_bboxes_to_sarplus(bboxes_xyz, mlarray)
+            
+            deoblique_affine_zyx = _get_bbox_affine_zyx(mlarray)
 
-            # 2D -> keep shapes rectangles (original behavior)
             if dims == 2:
-                data = bboxes_minmax_to_napari_rectangles_2d(bboxes)
+                data = bboxes_minmax_to_napari_rectangles_2d(bboxes_sar)
                 edge_color = _napari_bbox_edge_colors(
                     data,
                     labels=getattr(mlarray.meta.bbox, "labels", None),
@@ -206,7 +503,7 @@ def reader_function(path):
                 metadata = {
                     "name": f"{name} (BBoxes)",
                     "shape_type": "rectangle",
-                    "affine": affine,
+                    "affine": deoblique_affine_zyx,
                     "metadata": mlarray.meta.to_mapping(),
                     "face_color": "transparent",
                     "edge_color": edge_color,
@@ -217,15 +514,15 @@ def reader_function(path):
                 layer_data.append((data, metadata, layer_type))
 
             elif dims == 3:
-                box_count = len(bboxes)
+                box_count = len(bboxes_sar)
                 box_edge_color = _napari_bbox_edge_colors_count(
                     count=box_count,
                     labels=getattr(mlarray.meta.bbox, "labels", None),
                 )
-                surface_data = bboxes_minmax_to_napari_surface_3d(bboxes)
+                surface_data = bboxes_minmax_to_napari_surface_3d(bboxes_sar)
                 surface_kwargs = {
                     "name": f"{name} (BBoxes)",
-                    "affine": affine,
+                    "affine": deoblique_affine_zyx,
                     "metadata": mlarray.meta.to_mapping(),
                     "vertex_colors": np.repeat(
                         _with_alpha(box_edge_color, alpha=0.18),
