@@ -47,8 +47,10 @@ def write_single_image(path: str, data: Any, meta: dict) -> list[str]:
     original_direction = metadata.get("_original_direction_xyz")
     original_coordinate_system = metadata.get("_original_coordinate_system")
     
-    # Reconstruct MLArray with proper affine
-    mlarray_meta = Meta.from_mapping(metadata)
+    # Reconstruct MLArray with proper affine.
+    # Strip reader-injected "_original_*" keys that are not valid Meta fields.
+    meta_mapping = {k: v for k, v in metadata.items() if not k.startswith("_original_")}
+    mlarray_meta = Meta.from_mapping(meta_mapping)
     if original_affine is not None:
         mlarray_meta.spatial.affine = original_affine
     elif original_spacing is not None and original_origin is not None and original_direction is not None:
