@@ -125,8 +125,19 @@ def reader_function(path):
 
         # Build MedVol for coordinate handling (canonicalize=True required for
         # get_array / get_geometry).  For bbox-only files use a dummy 1-voxel array.
+        # MedVol expects a spatial-only array; files with channel/component axes
+        # need those axes stripped first (index 0 is taken along each one).
+        _SPATIAL_LABEL_SET = frozenset({'spatial_x', 'spatial_y', 'spatial_z'})
+        _raw_labels = mlarray.meta.spatial.axis_labels
+        _non_spatial_axes = tuple(
+            i for i, lbl in enumerate(_raw_labels) if str(lbl) not in _SPATIAL_LABEL_SET
+        ) if _raw_labels is not None else ()
+
         if has_array:
-            src_array = np.asarray(mlarray)
+            _arr = np.asarray(mlarray)
+            for ax in sorted(_non_spatial_axes, reverse=True):
+                _arr = np.take(_arr, 0, axis=ax)
+            src_array = _arr
         else:
             src_array = np.zeros((1,) * spatial_ndim, dtype=np.float32)
 
@@ -143,8 +154,8 @@ def reader_function(path):
 
         # ── Image / Labels layer ───────────────────────────────────────────────
         if has_array:
-            array_sar = mv.get_array(sarplus_cs)   # ZYX order
-            ndim = mlarray.ndim
+            array_sar = mv.get_array(sarplus_cs)   # ZYX order, spatial-only
+            ndim = array_sar.ndim
             sh   = array_sar.shape
 
             display_scale     = []
