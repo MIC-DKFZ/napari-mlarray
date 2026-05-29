@@ -59,7 +59,7 @@ def write_single_image(path: str, data: Any, meta: dict) -> list[str]:
         mlarray_meta.spatial.direction = original_direction
     
     if original_coordinate_system is not None:
-        mlarray_meta.coordinate_system = original_coordinate_system
+        mlarray_meta.spatial.coord_system = original_coordinate_system
     
     mlarray = MLArray(array_xyz, meta=mlarray_meta)
     mlarray.save(path)
