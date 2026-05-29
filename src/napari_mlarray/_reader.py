@@ -191,8 +191,13 @@ def reader_function(path):
                 bbox_translate = display_translate[:dims]
                 bbox_sh        = list(sh[:dims])
             else:
-                max_vox    = np.max(bboxes_sar, axis=(0, 2)).astype(int) + 1
-                bbox_sh    = max_vox.tolist()
+                stored_shape_xyz = mlarray.meta.spatial.shape
+                if stored_shape_xyz is not None:
+                    perm = list(range(dims - 1, -1, -1))
+                    bbox_sh = [int(stored_shape_xyz[p]) for p in perm]
+                else:
+                    max_vox = np.max(bboxes_sar, axis=(0, 2)).astype(int) + 1
+                    bbox_sh = max_vox.tolist()
                 bbox_scale     = [-sp[i] for i in range(dims)]
                 bbox_translate = [orig[i] + (bbox_sh[i] - 1) * sp[i] for i in range(dims)]
 
