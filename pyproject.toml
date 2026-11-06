@@ -1,7 +1,7 @@
 [project]
 name = "napari-mlarray"
 dynamic = ["version"]
-description = "A reader/writer Napari plugin for MLArray images."
+description = "napari reader and writer for MLArray (.mla) images, with correct physical geometry and orientation."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -9,7 +9,7 @@ authors = [
   {email = "karol.gotkowski@dkfz.de"},
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Framework :: napari",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -29,14 +29,15 @@ requires-python = ">=3.10"
 # or any other Qt bindings directly (e.g. PyQt5, PySide2).
 # See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
 dependencies = [
-    "mlarray",
+    "mlarray>=1.0.0,<2",
     "numpy",
+    "scipy",
 ]
 
 [project.optional-dependencies]
 # Allow easily installation with the full, default napari installation
 # (including Qt backend) using napari-mlarray[all].
-all = ["napari[all]>=0.7,<0.8"]
+all = ["napari[all]>=0.6"]
 
 [dependency-groups]
 dev = [
@@ -44,7 +45,7 @@ dev = [
     "pytest",  # https://docs.pytest.org/en/latest/contents.html
     "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
     "pytest-qt",  # https://pytest-qt.readthedocs.io/en/latest/
-    "napari[qt]>=0.7,<0.8",  # test with napari's default Qt bindings
+    "napari[qt]>=0.6",  # test with napari's default Qt bindings
 ]
 
 [project.entry-points."napari.manifest"]
