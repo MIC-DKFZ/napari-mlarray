@@ -279,8 +279,9 @@ def test_boxes_3d_are_shells_aligned_with_the_image(tmp_path):
     _patient_file(tmp_path / "b.mla", GRIDS["sagittal"][1], shape=(6, 7, 8),
                   values={"kind": "measurement"}, profiles={"ml": {"boxes": boxes}})
     viewer = _add(tmp_path / "b.mla")
-    image, shells = viewer.layers
+    image, shells, texts = viewer.layers
     assert shells._type_string == "labels" and shells.features["score"][0] == 0.9
+    assert texts._type_string == "points" and texts.features["box"][0] == "1 0.900"
     full = np.asarray(shells.data)
     on = np.argwhere(full > 0)
     world = np.array([shells.data_to_world(i) for i in on])
@@ -289,11 +290,14 @@ def test_boxes_3d_are_shells_aligned_with_the_image(tmp_path):
     corners = np.array([[z, y, x] for z in (1, 4) for y in (2, 5) for x in (3, 6)], float)
     corner_world = (rotation @ (m[:3, :3] @ corners.T + m[:3, 3:4])).T
     assert np.allclose(world.min(0), corner_world.min(0)) and np.allclose(world.max(0), corner_world.max(0))
-    # slicing computes the same outline as the full array
+    # 2-D slices show where they cut the box surface (the full volume, napari's 3-D view, is the wireframe)
+    from napari_bboxes import BoxShells
+
+    faces = np.asarray(BoxShells(shells.data.shape, shells.data.bounds, mode="faces"))
     for d in range(3):
         for k in range(full.shape[d]):
             key = (slice(None),) * d + (k,)
-            assert np.array_equal(np.asarray(shells.data[key]), full[key])
+            assert np.array_equal(np.asarray(shells.data[key]), faces[key])
     # the box interior is empty (a shell, not a filled box)
     lo, hi = on.min(0), on.max(0)
     assert not full[tuple(slice(a + 1, b) for a, b in zip(lo, hi))].any()
