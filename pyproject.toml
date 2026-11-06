@@ -30,7 +30,7 @@ requires-python = ">=3.10"
 # See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
 dependencies = [
     "mlarray>=1.0.0,<2",
-    "napari-bboxes>=0.1",
+    "napari-bboxes>=0.1.1",
     "numpy",
     "scipy",
 ]
