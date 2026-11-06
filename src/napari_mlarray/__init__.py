@@ -6,8 +6,17 @@ except ImportError:  # pragma: no cover
     __version__ = "unknown"
 
 from ._display import Settings, letters_to_lps, world_to_space
-from ._reader import get_display, napari_get_reader, read_layers, reader_function, set_display
-from ._writer import write_single_image
+from ._reader import get_display, layers_from_meta, napari_get_reader, read_layers, reader_function, set_display
+from ._writer import layer_to_array, write_single_image
+
+
+def add_layers(viewer, layer_data):
+    """Add layer data tuples (from ``read_layers``/``layers_from_meta``) to ``viewer``; returns the layers."""
+    layers = []
+    for data, kwargs, layer_type in layer_data:
+        added = getattr(viewer, f"add_{layer_type}")(data, **kwargs)
+        layers += added if isinstance(added, list) else [added]
+    return layers
 
 
 def add_mlarray(viewer, path, convention=None, oblique=None):
@@ -32,8 +41,11 @@ def add_mlarray(viewer, path, convention=None, oblique=None):
 
 __all__ = (
     "Settings",
+    "add_layers",
     "add_mlarray",
     "get_display",
+    "layer_to_array",
+    "layers_from_meta",
     "letters_to_lps",
     "napari_get_reader",
     "read_layers",

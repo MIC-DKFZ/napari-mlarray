@@ -53,19 +53,32 @@ def read_layers(path, convention: Optional[str] = None, oblique: Optional[str] =
     """napari layer data tuples ``(data, kwargs, layer_type)`` for one ``.mla`` file."""
     from mlarray import MLArray
 
-    settings = _display.Settings(convention or _settings.convention, oblique or _settings.oblique)
     image = MLArray.open(path, mmap_mode="r" if os.name != "nt" else None)
-    meta = image.meta
-    name = Path(path).name[: -len(".mla")]
-    shape = tuple(int(s) for s in image.shape)
+    return layers_from_meta(image, image.meta, Path(path).name[: -len(".mla")], path=str(path),
+                            convention=convention, oblique=oblique)
+
+
+def layers_from_meta(array, meta, name: str, path: Optional[str] = None, convention: Optional[str] = None,
+                     oblique: Optional[str] = None, labels: Optional[bool] = None) -> List[tuple]:
+    """napari layer data tuples for any array with MLArray metadata (an ``MLArray``, or a MedVol ``Image``'s
+    ``array`` and ``meta``).
+
+    ``array`` needs ``shape``, ``dtype`` and slicing (NumPy arrays and MLArrays qualify). ``labels`` forces a
+    Labels (True) or Image (False) layer; by default ``values.kind`` decides. Layers keep what the writer needs
+    to save them again (``metadata["napari_mlarray"]``).
+    """
+    settings = _display.Settings(convention or _settings.convention, oblique or _settings.oblique)
+    shape = tuple(int(s) for s in array.shape)
     has_array = len(shape) > 0 and all(s > 0 for s in shape)
     values = meta.values
     is_labels = values.kind in ("label", "instance") and values.label_layout != "channel"
+    if labels is not None:
+        is_labels = labels
     placement = _display.place(meta, shape, settings, split_channels=not is_labels)
     for note in placement.notes:
         if not note.startswith("grid rotated by a negligible amount"):
             warnings.warn(f"{name}: {note}", stacklevel=2)
-    record = {"path": str(path), "meta": meta, "dims": list(placement.dims),
+    record = {"path": path, "meta": meta, "dims": list(placement.dims),
               "world_labels": list(placement.axis_labels), "space": placement.space_name,
               "rotation": placement.world.rotation.tolist() if placement.world is not None else None,
               "resampled": placement.resample is not None,
@@ -78,17 +91,16 @@ def read_layers(path, convention: Optional[str] = None, oblique: Optional[str] =
     layers = []
     grid_shape = None
     if has_array:
-        data, kwargs, layer_type = _image_layer(image, meta, name, placement, settings, is_labels, record)
+        data, kwargs, layer_type = _image_layer(array, meta, name, placement, settings, is_labels, record)
         layers.append((data, kwargs, layer_type))
-        n_lead = placement.n_lead
-        grid_shape = data.shape[n_lead:]
+        grid_shape = data.shape[placement.n_lead:]
     boxes, _ = box_items(meta)
     if boxes is not None:
         if grid_shape is None:
             grid_shape, placement = _box_only_grid(meta, placement, settings)
         layers += box_layers(meta, name, placement, grid_shape, record)
     if not has_array and not layers:
-        warnings.warn(f"{name}: the file has no array data and no boxes", stacklevel=2)
+        warnings.warn(f"{name}: no array data and no boxes", stacklevel=2)
     return layers
 
 
@@ -104,7 +116,7 @@ def _image_layer(image, meta, name: str, placement, settings, is_labels: bool, r
     nbytes = int(np.prod(image.shape)) * dtype.itemsize
     in_memory = is_labels or placement.resample is not None or nbytes <= LAZY_BYTES
     if in_memory:
-        array = np.asarray(image.to_numpy())
+        array = np.asarray(image.to_numpy() if hasattr(image, "to_numpy") else image)
         array = np.transpose(array, placement.order)
         for d in placement.inserted:
             array = np.expand_dims(array, d)   # increasing d: earlier insertions shift later positions right

@@ -31,18 +31,26 @@ def write_single_image(path: str, data: Any, attributes: dict) -> List[str]:
     """napari writer for one Image or Labels layer."""
     from mlarray import MLArray
 
-    is_labels = "contrast_limits" not in attributes
-    transform = _data_to_world(attributes, np.ndim(data))
-    record = (attributes.get("metadata") or {}).get("napari_mlarray")
-    if record and record.get("role") != "boxes":
-        array, meta = _from_record(np.asarray(data), transform, record, attributes)
-    else:
-        array, meta = _new_metadata(np.asarray(data), transform, attributes, is_labels)
+    array, meta = layer_to_array(data, attributes)
     image = MLArray(array, meta=meta)
     if not str(path).lower().endswith(".mla"):
         path = f"{path}.mla"
     image.save(path)
     return [str(path)]
+
+
+def layer_to_array(data: Any, attributes: dict):
+    """``(array, mlarray.Meta)`` of an Image or Labels layer (``layer.as_layer_data_tuple()[:2]``).
+
+    A layer this plugin (or ``layers_from_meta``) made comes back in its original array order with its original
+    metadata; any other layer gets new metadata. The geometry is the layer's current transform.
+    """
+    is_labels = "contrast_limits" not in attributes
+    transform = _data_to_world(attributes, np.ndim(data))
+    record = (attributes.get("metadata") or {}).get("napari_mlarray")
+    if record and record.get("role") != "boxes":
+        return _from_record(np.asarray(data), transform, record, attributes)
+    return _new_metadata(np.asarray(data), transform, attributes, is_labels)
 
 
 def _data_to_world(attributes: dict, ndim: int) -> np.ndarray:
