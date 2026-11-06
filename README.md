@@ -80,6 +80,9 @@ or set `NAPARI_MLARRAY_CONVENTION` / `NAPARI_MLARRAY_OBLIQUE` before starting na
 | `profiles.ml.boxes` (3-D) | Labels layer of box outlines: every slice in every plane shows the box, and so does 3-D; hovering shows label and score |
 | `profiles.ml.boxes` (2-D) | Shapes rectangles with label and score |
 
+Boxes are drawn by [napari-bboxes](https://github.com/Karol-G/napari-bboxes), which you can also use on its own for
+boxes from any source.
+
 Files larger than 1 GiB are read slice by slice and stay on disk. Labels are always loaded, so you can paint.
 
 ## Saving

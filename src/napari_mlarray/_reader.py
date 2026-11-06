@@ -113,7 +113,7 @@ def _image_layer(image, meta, name: str, placement, settings, is_labels: bool, r
         data = DisplayArray(image, placement.dims, scale if apply_scale else None, offset if apply_scale else None, dtype)
 
     kwargs = {"name": name, "affine": placement.affine, "axis_labels": placement.axis_labels,
-              "units": _units(placement.units), "metadata": {"napari_mlarray": record}}
+              "units": _display.napari_units(placement.units), "metadata": {"napari_mlarray": record}}
     if is_labels:
         if not np.issubdtype(data.dtype, np.integer):
             data = data.astype(np.int64)
@@ -133,7 +133,7 @@ def _image_layer(image, meta, name: str, placement, settings, is_labels: bool, r
         names = names or [str(i) for i in range(n)]
         drop = _drop_dim(placement.affine, 0)
         kwargs.update({"channel_axis": 0, "name": [f"{name} [{c}]" for c in names], "affine": drop,
-                       "axis_labels": placement.axis_labels[1:], "units": _units(placement.units[1:]),
+                       "axis_labels": placement.axis_labels[1:], "units": _display.napari_units(placement.units[1:]),
                        "metadata": [{"napari_mlarray": {**record, "channel": i}} for i in range(n)]})
         if n == 1:
             kwargs["colormap"] = "gray"
@@ -145,27 +145,6 @@ def _image_layer(image, meta, name: str, placement, settings, is_labels: bool, r
 def _drop_dim(affine: np.ndarray, dim: int) -> np.ndarray:
     keep = [i for i in range(affine.shape[0]) if i != dim]
     return affine[np.ix_(keep, keep)]
-
-
-def _units(units):
-    """Units napari (pint) understands; others become None (pixel)."""
-    try:
-        import pint
-
-        registry = pint.get_application_registry()
-    except ImportError:  # pragma: no cover
-        return None
-    out = []
-    for unit in units:
-        if unit is None:
-            out.append("pixel")
-            continue
-        try:
-            registry.Unit(unit)
-            out.append(unit)
-        except Exception:  # noqa: BLE001 - pint raises several error types
-            out.append("pixel")
-    return out
 
 
 def _contrast_limits(statistics, scale: float, offset: float):

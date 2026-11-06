@@ -328,3 +328,21 @@ def camera(viewer):
     """The viewer's camera (``viewer.scene.camera`` since napari 0.9, ``viewer.camera`` before)."""
     scene = getattr(viewer, "scene", None)
     return scene.camera if scene is not None and hasattr(scene, "camera") else viewer.camera
+
+
+def napari_units(units) -> Optional[List[str]]:
+    """Units napari (pint) understands; others become ``pixel``."""
+    try:
+        import pint
+
+        registry = pint.get_application_registry()
+    except ImportError:  # pragma: no cover
+        return None
+    out = []
+    for unit in units:
+        try:
+            registry.Unit(unit)
+            out.append(unit)
+        except Exception:  # noqa: BLE001 - pint raises several error types; None also lands here
+            out.append("pixel")
+    return out
