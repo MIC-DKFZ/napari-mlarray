@@ -293,7 +293,7 @@ def test_boxes_3d_are_shells_aligned_with_the_image(tmp_path):
     # 2-D slices show where they cut the box surface (the full volume, napari's 3-D view, is the wireframe)
     from napari_bboxes import BoxShells
 
-    faces = np.asarray(BoxShells(shells.data.shape, shells.data.bounds, mode="faces"))
+    faces = BoxShells(shells.data.shape, shells.data.bounds, mode="faces")
     for d in range(3):
         for k in range(full.shape[d]):
             key = (slice(None),) * d + (k,)
@@ -341,3 +341,20 @@ def test_reader_accepts_only_mla():
     assert callable(napari_mlarray.napari_get_reader("a.mla"))
     assert napari_mlarray.napari_get_reader(["a.mla", "b.mla"]) is not None
     assert napari_mlarray.napari_get_reader("a.nii.gz") is None
+
+
+def test_negligible_rotation_is_snapped_not_resampled_and_written_back_exactly(tmp_path):
+    linear = _rot(0.0014, 0.0) @ GRIDS["lps"][1]          # scanner round-off, far below a voxel
+    array = np.random.default_rng(3).integers(0, 3, (20, 30, 40)).astype(np.uint8)
+    _, matrix = _patient_file(tmp_path / "r.mla", linear, array=array, shape=array.shape,
+                              values={"kind": "label"})
+    layer = _add(tmp_path / "r.mla").layers[0]
+    record = layer.metadata["napari_mlarray"]
+    assert not record["resampled"] and layer.data.shape == array.shape
+    block = np.asarray(layer.affine.affine_matrix)[:3, :3]
+    assert np.allclose(block, np.diag(np.diag(block)))
+    data, state, _ = layer.as_layer_data_tuple()
+    write_single_image(str(tmp_path / "back.mla"), data, state)
+    back = MLArray(tmp_path / "back.mla")
+    np.testing.assert_allclose(back.spaces[0].matrix(), matrix, atol=1e-12)
+    np.testing.assert_array_equal(back.to_numpy(), array)

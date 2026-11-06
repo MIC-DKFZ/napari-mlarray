@@ -52,6 +52,8 @@ _OPPOSITE = {"inferior": "superior", "superior": "inferior", "posterior": "anter
 _LPS = {"lr": 0, "ap": 1, "si": 2}
 
 CONVENTIONS = ("radiological", "neurological")
+#: largest position change from snapping a grid to the world axes, in voxels, that still counts as axis-aligned
+SNAP_TOLERANCE = 0.1
 OBLIQUE = ("resample", "nearest", "keep")
 
 
@@ -147,6 +149,7 @@ class Placement:
     oblique: bool = False
     resample: Optional[Dict] = None        # set when the grid must be resampled (see resample_plan)
     notes: List[str] = field(default_factory=list)
+    true_affine: Optional[np.ndarray] = None   # the exact affine when ``affine`` was snapped to the world axes
 
     @property
     def ndim(self) -> int:
@@ -249,8 +252,18 @@ def place(meta, shape: Sequence[int], settings: Settings = Settings(), split_cha
     world_linear = world_linear[:, perm]
     columns = [columns[c] for c in perm]
 
+    true_linear = world_linear.copy()
     oblique = not _is_axis_aligned(world_linear)
     resample = None
+    if oblique:
+        # rotations far below a voxel over the whole grid (scanner round-off) count as axis-aligned
+        snapped = _snap(world_linear)
+        sizes = np.array([1 if c is None else int(shape[c]) for c in columns])
+        corners = np.array(np.meshgrid(*[[0, max(n - 1, 0)] for n in sizes], indexing="ij")).reshape(len(sizes), -1)
+        error = float(np.max(np.linalg.norm((snapped - world_linear) @ corners, axis=0)))
+        if error <= SNAP_TOLERANCE * float(np.min(np.linalg.norm(world_linear, axis=0))):
+            world_linear, oblique = snapped, False
+            notes.append(f"grid rotated by a negligible amount: axes snapped (positions move by at most {error:.3g})")
     if oblique:
         if settings.oblique == "nearest":
             world_linear = _snap(world_linear)
@@ -274,9 +287,12 @@ def place(meta, shape: Sequence[int], settings: Settings = Settings(), split_cha
     else:
         affine[block, block] = world_linear
         affine[block, -1] = world_shift
+    true_affine = affine.copy()
+    if resample is None:
+        true_affine[block, block] = true_linear
     return Placement(leading + columns + unmapped, affine, labels + frame.labels + [names[i] for i in unmapped],
                      units + frame.units + [None] * len(unmapped), n_lead, channel_dim, frame, space.name,
-                     oblique, resample, notes)
+                     oblique, resample, notes, true_affine)
 
 
 def _complete_basis(linear: np.ndarray, count: int) -> np.ndarray:

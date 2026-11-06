@@ -69,6 +69,13 @@ def _from_record(data: np.ndarray, transform: np.ndarray, record: dict, attribut
     array_axis = list(record["dims"])          # display dim -> array axis (None: inserted size-1 dim)
     inserted = [d for d, a in enumerate(array_axis) if a is None]
     channel = record.get("channel")
+    if record.get("true_affine") is not None:
+        shown = np.asarray(record["display_affine"])
+        if channel is not None:
+            shown = shown[1:, 1:]
+        if transform.shape == shown.shape and np.allclose(transform, shown):
+            exact = np.asarray(record["true_affine"])
+            transform = exact[1:, 1:] if channel is not None else exact   # not moved: write the exact geometry
     if channel is not None:
         # one channel of a split image: put the channel dim back (size 1)
         data = data[None]
@@ -136,7 +143,7 @@ def _from_record(data: np.ndarray, transform: np.ndarray, record: dict, attribut
     for key in ("storage", "writer"):
         meta_dict.pop(key, None)
     meta = Meta.from_dict(meta_dict, shape=array.shape)
-    notes = {"resampled": "oblique grid resampled for display", "snapped": "oblique grid snapped to world axes"}
+    notes = {"resampled": "oblique grid resampled for display"}
     warnings = [text for key, text in notes.items() if record.get(key)]
     meta.add_history("edited", tool=_tool(), **({"warnings": warnings} if warnings else {}))
     return np.ascontiguousarray(array), meta

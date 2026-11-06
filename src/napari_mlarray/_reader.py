@@ -63,13 +63,18 @@ def read_layers(path, convention: Optional[str] = None, oblique: Optional[str] =
     is_labels = values.kind in ("label", "instance") and values.label_layout != "channel"
     placement = _display.place(meta, shape, settings, split_channels=not is_labels)
     for note in placement.notes:
-        warnings.warn(f"{name}: {note}", stacklevel=2)
+        if not note.startswith("grid rotated by a negligible amount"):
+            warnings.warn(f"{name}: {note}", stacklevel=2)
     record = {"path": str(path), "meta": meta, "dims": list(placement.dims),
               "world_labels": list(placement.axis_labels), "space": placement.space_name,
               "rotation": placement.world.rotation.tolist() if placement.world is not None else None,
               "resampled": placement.resample is not None,
               "snapped": placement.oblique and settings.oblique == "nearest",
               "convention": settings.convention, "shape": list(shape)}
+    if placement.true_affine is not None and not np.allclose(placement.true_affine, placement.affine):
+        # snapped for display: the writer restores the exact geometry while the layer is not moved
+        record["display_affine"] = placement.affine.tolist()
+        record["true_affine"] = placement.true_affine.tolist()
     layers = []
     grid_shape = None
     if has_array:
