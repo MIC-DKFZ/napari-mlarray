@@ -182,11 +182,12 @@ def _new_metadata(data: np.ndarray, transform: np.ndarray, attributes: dict, is_
         meta_dict["spaces"] = [{"name": "patient", "axes": PATIENT_AXES,
                                 "from_array": {"array_axes": space_names, "matrix": matrix.tolist()}}]
     elif not np.allclose(transform, np.eye(ndim + 1)):
-        names = [str(v) for v in (world or space_names)][-n_sp:] if world else space_names
-        names = names if len(set(names)) == n_sp else space_names
-        units = attributes.get("units") or [None] * ndim
-        space_axes = [{"name": n, **({"unit": str(u)} if u not in (None, "pixel") else {})}
-                      for n, u in zip(names, list(units)[-n_sp:])]
+        names = [str(v) for v in world][-n_sp:] if world else space_names
+        if len(set(names)) != n_sp or not all(n and not n.lstrip("-").isdigit() for n in names):
+            names = space_names                       # napari's default labels are "-3", "-2", "-1"
+        units = [str(u) if u is not None else "pixel" for u in (attributes.get("units") or [None] * ndim)]
+        space_axes = [{"name": n, "unit": u if u != "pixel" else "arbitrary"}
+                      for n, u in zip(names, units[-n_sp:])]
         matrix = np.eye(n_sp + 1)
         matrix[:n_sp, :n_sp] = block
         matrix[:n_sp, -1] = shift
@@ -211,6 +212,11 @@ def _label_table(attributes: dict) -> Dict[str, Any]:
 
 
 def _viewer_axis_labels(ndim: int) -> Optional[List[str]]:
+    """The world axis labels of the current viewer, last ``ndim``.
+
+    napari >= 0.8 fills ``viewer.dims.axis_labels`` from the layers; older versions keep their defaults, so the
+    labels of a layer this plugin opened in the viewer are used then.
+    """
     try:
         import napari
 
@@ -220,6 +226,13 @@ def _viewer_axis_labels(ndim: int) -> Optional[List[str]]:
     if viewer is None:
         return None
     labels = [str(v) for v in viewer.dims.axis_labels]
+    if len(labels) >= 3 and letters_to_lps(labels[-3:]) is not None:
+        return labels[-ndim:] if len(labels) >= ndim else None
+    for layer in viewer.layers:
+        record = (getattr(layer, "metadata", None) or {}).get("napari_mlarray") or {}
+        world = record.get("world_labels")
+        if world and len(world) >= 3 and letters_to_lps(world[-3:]) is not None:
+            return [str(v) for v in world][-ndim:] if len(world) >= ndim else None
     return labels[-ndim:] if len(labels) >= ndim else None
 
 

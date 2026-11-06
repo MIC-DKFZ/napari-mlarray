@@ -358,3 +358,31 @@ def test_negligible_rotation_is_snapped_not_resampled_and_written_back_exactly(t
     back = MLArray(tmp_path / "back.mla")
     np.testing.assert_allclose(back.spaces[0].matrix(), matrix, atol=1e-12)
     np.testing.assert_array_equal(back.to_numpy(), array)
+
+
+def test_new_layer_in_a_viewer_without_patient_labels(tmp_path, monkeypatch):
+    import napari
+
+    viewer = ViewerModel()
+    layer = viewer.add_labels(np.zeros((4, 5, 6), np.uint8), scale=(2.0, 1.0, 0.5), translate=(1.0, 2.0, 3.0))
+    monkeypatch.setattr(napari, "current_viewer", lambda: viewer)
+    data, state, _ = layer.as_layer_data_tuple()
+    write_single_image(str(tmp_path / "plain.mla"), data, state)
+    space = MLArray(tmp_path / "plain.mla").spaces[0]
+    assert space.name == "world" and [a.name for a in space.axes] == ["z", "y", "x"]
+    np.testing.assert_allclose(space.matrix()[:3, 3], [1, 2, 3])
+    np.testing.assert_allclose(np.diag(space.matrix())[:3], [2, 1, 0.5])
+
+
+def test_patient_world_is_found_from_the_layers_when_dims_have_no_labels(tmp_path, monkeypatch):
+    import napari
+
+    _patient_file(tmp_path / "a.mla", GRIDS["sagittal"][1])
+    viewer = _add(tmp_path / "a.mla")
+    viewer.dims.axis_labels = ("-3", "-2", "-1")      # as napari < 0.8 leaves them
+    image = viewer.layers[0]
+    labels = viewer.add_labels(np.zeros(image.data.shape, np.uint8), affine=image.affine)
+    monkeypatch.setattr(napari, "current_viewer", lambda: viewer)
+    data, state, _ = labels.as_layer_data_tuple()
+    write_single_image(str(tmp_path / "new.mla"), data, state)
+    assert [a.increases_toward for a in MLArray(tmp_path / "new.mla").spaces[0].axes] == ["left", "posterior", "superior"]
